@@ -91,6 +91,7 @@ module ActiveRecord
           acts_as_list_class.transaction do
             lower_item.decrement_position
             increment_position
+            fix_positions
           end
         end
 
@@ -101,6 +102,7 @@ module ActiveRecord
           acts_as_list_class.transaction do
             higher_item.increment_position
             decrement_position
+            fix_positions
           end
         end
 
@@ -159,8 +161,9 @@ module ActiveRecord
         # Return the next higher item in the list.
         def higher_item
           return nil unless in_list?
-          acts_as_list_class.find(:first, :conditions =>
-            "#{scope_condition} AND #{position_column} = #{(send(position_column).to_i - 1).to_s}"
+          acts_as_list_class.find(:last, :conditions =>
+            "#{scope_condition} AND #{position_column} <= #{(send(position_column).to_i - 1).to_s}",
+            :order => "position ASC"
           )
         end
 
@@ -168,8 +171,20 @@ module ActiveRecord
         def lower_item
           return nil unless in_list?
           acts_as_list_class.find(:first, :conditions =>
-            "#{scope_condition} AND #{position_column} = #{(send(position_column).to_i + 1).to_s}"
+            "#{scope_condition} AND #{position_column} >= #{(send(position_column).to_i + 1).to_s}",
+            :order => "position ASC"
           )
+        end
+        
+        # Fix the positions of items in a given scope, in case we get duplicate positions
+        def fix_positions
+          return nil unless in_list?
+          return nil if acts_as_list_class.count(:all, :conditions => "#{scope_condition}", :group => :position, :having => "count_all > 1").blank?
+          acts_as_list_class.find(:all, :conditions => "#{scope_condition}", :order => "position ASC").each_with_index do |object, index|
+            new_position = index + 1
+            next if object.position == new_position
+            object.update_attributes(:position => new_position)
+          end
         end
 
         # Test if this record is in a list
@@ -183,11 +198,7 @@ module ActiveRecord
           end
 
           def add_to_list_bottom
-            if self[position_column].nil?
-              self[position_column] = bottom_position_in_list.to_i + 1 
-            else
-              increment_positions_on_lower_items(self[position_column])
-            end
+            self[position_column] = bottom_position_in_list.to_i + 1
           end
 
           # Overwrite this method to define the scope of the list changes
@@ -203,7 +214,8 @@ module ActiveRecord
           # Returns the bottom item
           def bottom_item(except = nil)
             conditions = scope_condition
-            conditions = "#{conditions} AND #{self.class.primary_key} != #{except.id}" if except
+            # GAW: Hacked so we quote the except.id since we are using GUID values .. check conditionally and submit patch
+            conditions = "#{conditions} AND #{self.class.primary_key} != '#{except.id}'" if except
             acts_as_list_class.find(:first, :conditions => conditions, :order => "#{position_column} DESC")
           end
 
